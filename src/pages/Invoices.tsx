@@ -1,374 +1,276 @@
-import { DashboardLayout } from "@/components/DashboardLayout";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import { Navigation } from "@/components/layout/Navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Download, Eye, Plus, Trash2 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
-import { useEffect, useState } from "react";
-import { toast } from "@/hooks/use-toast";
+import { Plus, Search, Loader2, Edit, Trash2 } from "lucide-react";
+import { InvoiceDialog } from "@/components/invoices/InvoiceDialog";
+import { useToast } from "@/hooks/use-toast";
+import { Badge } from "@/components/ui/badge";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { format } from "date-fns";
 
-type Invoice = {
-  id: string;
-  project_id: string;
-  amount: number | null;
-  due_date: string | null;
-  status: string;
-  notes: string | null;
-  invoice_number: string | null;
-  created_at: string;
-};
-
-type Project = {
-  id: string;
-  name: string;
+const statusColors = {
+  draft: "bg-muted text-muted-foreground",
+  sent: "bg-primary text-primary-foreground",
+  paid: "bg-success text-success-foreground",
+  overdue: "bg-destructive text-destructive-foreground",
+  cancelled: "bg-muted text-muted-foreground",
 };
 
 const Invoices = () => {
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  
-  // Form state
-  const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [amount, setAmount] = useState("");
-  const [dueDate, setDueDate] = useState("");
-  const [status, setStatus] = useState("draft");
-  const [notes, setNotes] = useState("");
-  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingInvoice, setEditingInvoice] = useState<any>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
-    try {
-      const [invoicesResult, projectsResult] = await Promise.all([
-        supabase.from("invoices").select("*").order("created_at", { ascending: false }),
-        supabase.from("projects").select("id, name"),
-      ]);
-
-      if (invoicesResult.error) throw invoicesResult.error;
-      if (projectsResult.error) throw projectsResult.error;
-
-      setInvoices(invoicesResult.data || []);
-      setProjects(projectsResult.data || []);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to load invoices",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const addInvoice = async () => {
-    if (!selectedProjectId || !amount) {
-      toast({
-        title: "Error",
-        description: "Please fill in required fields",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    try {
-      const { error } = await supabase.from("invoices").insert({
-        project_id: selectedProjectId,
-        amount: parseFloat(amount),
-        due_date: dueDate || null,
-        status,
-        notes: notes || null,
-        invoice_number: invoiceNumber || null,
-      });
-
+  const { data: invoices, isLoading } = useQuery({
+    queryKey: ["invoices"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("invoices")
+        .select("*")
+        .order("created_at", { ascending: false });
       if (error) throw error;
+      return data;
+    },
+  });
 
-      toast({
-        title: "Success",
-        description: "Invoice added successfully",
-      });
+  const { data: projects } = useQuery({
+    queryKey: ["projects"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("projects").select("*");
+      if (error) throw error;
+      return data;
+    },
+  });
 
-      setDialogOpen(false);
-      resetForm();
-      fetchData();
-    } catch (error) {
+  const createMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const { error } = await supabase.from("invoices").insert(data);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      toast({ title: "Success", description: "Invoice created successfully" });
+      setIsDialogOpen(false);
+    },
+    onError: () => {
       toast({
         title: "Error",
-        description: "Failed to add invoice",
+        description: "Failed to create invoice",
         variant: "destructive",
       });
-    }
-  };
+    },
+  });
 
-  const deleteInvoice = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this invoice?")) return;
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: any }) => {
+      const { error } = await supabase.from("invoices").update(data).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      toast({ title: "Success", description: "Invoice updated successfully" });
+      setIsDialogOpen(false);
+      setEditingInvoice(null);
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to update invoice",
+        variant: "destructive",
+      });
+    },
+  });
 
-    try {
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
       const { error } = await supabase.from("invoices").delete().eq("id", id);
-
       if (error) throw error;
-
-      toast({
-        title: "Success",
-        description: "Invoice deleted successfully",
-      });
-
-      fetchData();
-    } catch (error) {
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      toast({ title: "Success", description: "Invoice deleted successfully" });
+      setDeleteId(null);
+    },
+    onError: () => {
       toast({
         title: "Error",
         description: "Failed to delete invoice",
         variant: "destructive",
       });
+    },
+  });
+
+  const handleSubmit = (data: any) => {
+    if (editingInvoice) {
+      updateMutation.mutate({ id: editingInvoice.id, data });
+    } else {
+      createMutation.mutate(data);
     }
   };
 
-  const resetForm = () => {
-    setSelectedProjectId("");
-    setAmount("");
-    setDueDate("");
-    setStatus("draft");
-    setNotes("");
-    setInvoiceNumber("");
-  };
+  const filteredInvoices = invoices?.filter(
+    (invoice: any) =>
+      invoice.invoice_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      invoice.notes?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   const getProjectName = (projectId: string) => {
-    return projects.find((p) => p.id === projectId)?.name || "Unknown Project";
+    return projects?.find((p: any) => p.id === projectId)?.name || "Unknown";
   };
 
-  const totalPaid = invoices
-    .filter((inv) => inv.status === "paid")
-    .reduce((sum, inv) => sum + (inv.amount || 0), 0);
-
-  const totalPending = invoices
-    .filter((inv) => inv.status === "pending")
-    .reduce((sum, inv) => sum + (inv.amount || 0), 0);
-
-  const nextPayment = invoices.find((inv) => inv.status === "pending")?.due_date;
-
-  if (loading) {
-    return (
-      <DashboardLayout>
-        <div className="flex items-center justify-center h-[calc(100vh-12rem)]">
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </DashboardLayout>
-    );
-  }
-
   return (
-    <DashboardLayout>
-      <div className="space-y-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground">Invoices & Payments</h1>
-            <p className="text-muted-foreground mt-2">View and manage your project invoices.</p>
+    <div className="min-h-screen bg-background">
+      <Navigation />
+      <div className="container mx-auto py-8 px-4">
+        <div className="flex flex-col gap-6">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <h1 className="text-4xl font-bold tracking-tight">Invoices</h1>
+              <p className="text-muted-foreground mt-2">
+                Manage and track all your invoices
+              </p>
+            </div>
+            <Button onClick={() => { setEditingInvoice(null); setIsDialogOpen(true); }}>
+              <Plus className="mr-2 h-4 w-4" />
+              New Invoice
+            </Button>
           </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="w-4 h-4 mr-2" />
-                Add Invoice
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-md">
-              <DialogHeader>
-                <DialogTitle>Create New Invoice</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 py-4">
-                <div>
-                  <Label htmlFor="project">Project</Label>
-                  <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select project" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {projects.map((project) => (
-                        <SelectItem key={project.id} value={project.id}>
-                          {project.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="invoice-number">Invoice Number</Label>
-                  <Input
-                    id="invoice-number"
-                    value={invoiceNumber}
-                    onChange={(e) => setInvoiceNumber(e.target.value)}
-                    placeholder="INV-001"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="amount">Amount (₦)</Label>
-                  <Input
-                    id="amount"
-                    type="number"
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                    placeholder="0.00"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="due-date">Due Date</Label>
-                  <Input
-                    id="due-date"
-                    type="date"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="status">Status</Label>
-                  <Select value={status} onValueChange={setStatus}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="draft">Draft</SelectItem>
-                      <SelectItem value="pending">Pending</SelectItem>
-                      <SelectItem value="paid">Paid</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="notes">Notes</Label>
-                  <Input
-                    id="notes"
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    placeholder="Additional notes"
-                  />
-                </div>
-                <Button onClick={addInvoice} className="w-full">
-                  Create Invoice
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
-        </div>
 
-        <div className="grid gap-6 md:grid-cols-3">
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <CardTitle className="text-base font-medium">Total Paid</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-bold text-success">₦{totalPaid.toLocaleString()}</p>
-              <p className="text-sm text-muted-foreground mt-1">All time</p>
-            </CardContent>
-          </Card>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search invoices..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10"
+            />
+          </div>
 
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <CardTitle className="text-base font-medium">Pending</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-bold text-warning">₦{totalPending.toLocaleString()}</p>
-              <p className="text-sm text-muted-foreground mt-1">Due soon</p>
-            </CardContent>
-          </Card>
-
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <CardTitle className="text-base font-medium">Next Payment</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-bold text-card-foreground">
-                {nextPayment ? new Date(nextPayment).toLocaleDateString() : "None"}
-              </p>
-              <p className="text-sm text-muted-foreground mt-1">
-                {invoices.find((inv) => inv.status === "pending")?.invoice_number || "No pending invoices"}
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-
-        <Card className="border-border bg-card">
-          <CardHeader>
-            <CardTitle>Invoice History</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {invoices.length === 0 ? (
-              <p className="text-center text-muted-foreground py-8">
-                No invoices yet. Create your first invoice!
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {invoices.map((invoice) => (
-                  <div
-                    key={invoice.id}
-                    className="flex items-center justify-between p-4 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-3 mb-1">
-                        <p className="font-semibold text-card-foreground">
-                          {invoice.invoice_number || `INV-${invoice.id.slice(0, 8)}`}
-                        </p>
-                        <span
-                          className={`status-badge ${
-                            invoice.status === "paid"
-                              ? "status-completed"
-                              : invoice.status === "pending"
-                              ? "status-pending"
-                              : "status-progress"
-                          }`}
-                        >
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+          ) : (
+            <div className="rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Invoice #</TableHead>
+                    <TableHead>Project</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>Due Date</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredInvoices?.map((invoice: any) => (
+                    <TableRow key={invoice.id}>
+                      <TableCell className="font-medium">
+                        {invoice.invoice_number || "Draft"}
+                      </TableCell>
+                      <TableCell>{getProjectName(invoice.project_id)}</TableCell>
+                      <TableCell>${Number(invoice.amount || 0).toLocaleString()}</TableCell>
+                      <TableCell>
+                        {invoice.due_date
+                          ? format(new Date(invoice.due_date), "MMM d, yyyy")
+                          : "-"}
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={statusColors[invoice.status as keyof typeof statusColors]}>
                           {invoice.status}
-                        </span>
-                      </div>
-                      <p className="text-sm text-muted-foreground truncate">
-                        {getProjectName(invoice.project_id)}
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Created: {new Date(invoice.created_at).toLocaleDateString()}
-                        {invoice.due_date && ` · Due: ${new Date(invoice.due_date).toLocaleDateString()}`}
-                      </p>
-                      {invoice.notes && (
-                        <p className="text-xs text-muted-foreground mt-1">Note: {invoice.notes}</p>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <p className="text-xl font-bold text-card-foreground">
-                        ₦{invoice.amount?.toLocaleString() || "0"}
-                      </p>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => deleteInvoice(invoice.id)}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setEditingInvoice(invoice);
+                              setIsDialogOpen(true);
+                            }}
+                          >
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setDeleteId(invoice.id)}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {!filteredInvoices?.length && (
+                <div className="text-center py-12">
+                  <p className="text-muted-foreground">No invoices found</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
-    </DashboardLayout>
+
+      <InvoiceDialog
+        open={isDialogOpen}
+        onOpenChange={(open) => {
+          setIsDialogOpen(open);
+          if (!open) setEditingInvoice(null);
+        }}
+        onSubmit={handleSubmit}
+        invoice={editingInvoice}
+        projects={projects}
+        isLoading={createMutation.isPending || updateMutation.isPending}
+      />
+
+      <AlertDialog open={!!deleteId} onOpenChange={() => setDeleteId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the invoice.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteId && deleteMutation.mutate(deleteId)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   );
 };
 

@@ -1,122 +1,194 @@
-import { DashboardLayout } from "@/components/DashboardLayout";
-import { ProjectCard } from "@/components/ProjectCard";
-import { StatCard } from "@/components/StatCard";
-import { FolderKanban, CheckCircle2, Clock, TrendingUp } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { useEffect, useState } from "react";
-import { toast } from "@/hooks/use-toast";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Navigation } from "@/components/layout/Navigation";
+import { FolderKanban, FileText, MessageSquare, TrendingUp, Loader2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { format } from "date-fns";
 
 const Dashboard = () => {
-  const navigate = useNavigate();
-  const [projects, setProjects] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchProjects();
-  }, []);
-
-  const fetchProjects = async () => {
-    try {
+  const { data: projects, isLoading: projectsLoading } = useQuery({
+    queryKey: ["projects"],
+    queryFn: async () => {
       const { data, error } = await supabase
         .from("projects")
         .select("*")
         .order("created_at", { ascending: false });
-
       if (error) throw error;
-      setProjects(data || []);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to load projects",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+      return data;
+    },
+  });
 
-  const activeProjects = projects.filter((p) => p.status === "active");
-  const completedProjects = projects.filter((p) => p.status === "completed");
+  const { data: invoices, isLoading: invoicesLoading } = useQuery({
+    queryKey: ["invoices"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("invoices")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  const { data: messages, isLoading: messagesLoading } = useQuery({
+    queryKey: ["messages"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  const stats = [
+    {
+      title: "Total Projects",
+      value: projects?.length || 0,
+      icon: FolderKanban,
+      description: `${projects?.filter(p => p.status === "active").length || 0} active`,
+      color: "text-primary",
+    },
+    {
+      title: "Invoices",
+      value: invoices?.length || 0,
+      icon: FileText,
+      description: `${invoices?.filter(i => i.status === "draft").length || 0} drafts`,
+      color: "text-accent",
+    },
+    {
+      title: "Messages",
+      value: messages?.length || 0,
+      icon: MessageSquare,
+      description: "Total conversations",
+      color: "text-success",
+    },
+    {
+      title: "Revenue",
+      value: `$${invoices?.reduce((sum, inv) => sum + (Number(inv.amount) || 0), 0).toLocaleString()}`,
+      icon: TrendingUp,
+      description: "Total invoiced",
+      color: "text-warning",
+    },
+  ];
+
+  const isLoading = projectsLoading || invoicesLoading || messagesLoading;
 
   return (
-    <DashboardLayout>
-      <div className="space-y-8">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground">Welcome back, John 👋</h1>
-          <p className="text-muted-foreground mt-2">Here's what's happening with your projects.</p>
-        </div>
-
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-          <StatCard
-            title="Total Projects"
-            value={projects.length}
-            icon={FolderKanban}
-          />
-          <StatCard
-            title="Completed"
-            value={completedProjects.length}
-            icon={CheckCircle2}
-          />
-          <StatCard
-            title="Active"
-            value={activeProjects.length}
-            icon={Clock}
-          />
-          <StatCard
-            title="Success Rate"
-            value={projects.length > 0 ? `${Math.round((completedProjects.length / projects.length) * 100)}%` : "0%"}
-            icon={TrendingUp}
-          />
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-semibold text-foreground">Recent Projects</h2>
-            <button 
-              onClick={() => navigate("/project-manager")}
-              className="text-sm font-medium text-primary hover:text-primary-light transition-colors"
-            >
-              Manage projects →
-            </button>
+    <div className="min-h-screen bg-background">
+      <Navigation />
+      <div className="container mx-auto py-8 px-4">
+        <div className="space-y-8">
+          <div>
+            <h1 className="text-4xl font-bold tracking-tight">Dashboard</h1>
+            <p className="text-muted-foreground mt-2">
+              Overview of your projects, invoices, and messages
+            </p>
           </div>
-          {loading ? (
-            <p className="text-muted-foreground">Loading projects...</p>
-          ) : projects.length === 0 ? (
-            <p className="text-muted-foreground">No projects yet. Create your first project!</p>
-          ) : (
-            <div className="grid gap-6 md:grid-cols-2">
-              {projects.slice(0, 4).map((project) => (
-                <ProjectCard
-                  key={project.id}
-                  title={project.name}
-                  status={project.status as "progress" | "completed" | "pending"}
-                  progress={project.status === "completed" ? 100 : project.status === "active" ? 50 : 10}
-                  deadline="Ongoing"
-                  description={project.description || "No description"}
-                  onClick={() => navigate(`/project/${project.id}`)}
-                />
-              ))}
+
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
             </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                {stats.map((stat) => {
+                  const Icon = stat.icon;
+                  return (
+                    <Card key={stat.title} className="hover:shadow-lg transition-shadow">
+                      <CardHeader className="flex flex-row items-center justify-between pb-2">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">
+                          {stat.title}
+                        </CardTitle>
+                        <Icon className={`h-4 w-4 ${stat.color}`} />
+                      </CardHeader>
+                      <CardContent>
+                        <div className="text-3xl font-bold">{stat.value}</div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {stat.description}
+                        </p>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Recent Projects</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {projects?.slice(0, 5).map((project: any) => (
+                        <div
+                          key={project.id}
+                          className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors"
+                        >
+                          <div className="flex-1">
+                            <p className="font-medium">{project.name}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {format(new Date(project.created_at), "MMM d, yyyy")}
+                            </p>
+                          </div>
+                          <Badge variant="outline">{project.status}</Badge>
+                        </div>
+                      ))}
+                      {!projects?.length && (
+                        <p className="text-sm text-muted-foreground text-center py-4">
+                          No projects yet
+                        </p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Recent Invoices</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {invoices?.slice(0, 5).map((invoice: any) => (
+                        <div
+                          key={invoice.id}
+                          className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors"
+                        >
+                          <div className="flex-1">
+                            <p className="font-medium">{invoice.invoice_number || "Draft"}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {invoice.due_date
+                                ? `Due ${format(new Date(invoice.due_date), "MMM d, yyyy")}`
+                                : "No due date"}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-semibold">
+                              ${Number(invoice.amount || 0).toLocaleString()}
+                            </p>
+                            <Badge variant="outline" className="text-xs">
+                              {invoice.status}
+                            </Badge>
+                          </div>
+                        </div>
+                      ))}
+                      {!invoices?.length && (
+                        <p className="text-sm text-muted-foreground text-center py-4">
+                          No invoices yet
+                        </p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </>
           )}
         </div>
-
-        <div className="bg-gradient-primary rounded-2xl p-8 text-center">
-          <h3 className="text-2xl font-bold text-primary-foreground mb-2">
-            Need help with your project?
-          </h3>
-          <p className="text-primary-foreground/90 mb-4">
-            Our team is here to assist you every step of the way.
-          </p>
-          <p className="text-primary-foreground/90 mb-6 font-semibold">
-            📞 09099996659
-          </p>
-          <button className="px-6 py-3 bg-accent text-accent-foreground rounded-lg font-semibold hover:bg-accent-muted transition-colors">
-            Contact Support
-          </button>
-        </div>
       </div>
-    </DashboardLayout>
+    </div>
   );
 };
 

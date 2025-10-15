@@ -1,250 +1,244 @@
-import { DashboardLayout } from "@/components/DashboardLayout";
-import { Card } from "@/components/ui/card";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import { Navigation } from "@/components/layout/Navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Send } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
-import { useEffect, useState } from "react";
-import { toast } from "@/components/ui/use-toast";
-
-type Message = {
-  id: string;
-  sender: string;
-  content: string;
-  created_at: string;
-  project_id: string;
-};
-
-type Project = {
-  id: string;
-  name: string;
-  description: string | null;
-};
+import { Textarea } from "@/components/ui/textarea";
+import { Send, Loader2, Trash2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { format } from "date-fns";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 const Messages = () => {
-  const [loading, setLoading] = useState(true);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [newMessage, setNewMessage] = useState("");
+  const [selectedProject, setSelectedProject] = useState<string>("");
+  const [sender, setSender] = useState("");
+  const [content, setContent] = useState("");
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    fetchProjects();
-  }, []);
-
-  useEffect(() => {
-    if (selectedProject) {
-      fetchMessages(selectedProject.id);
-      subscribeToMessages(selectedProject.id);
-    }
-  }, [selectedProject]);
-
-  const fetchProjects = async () => {
-    try {
-      const { data, error } = await supabase
-        .from("projects")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-      setProjects(data || []);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to load projects",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchMessages = async (projectId: string) => {
-    try {
-      const { data, error } = await supabase
+  const { data: messages, isLoading } = useQuery({
+    queryKey: ["messages", selectedProject],
+    queryFn: async () => {
+      let query = supabase
         .from("messages")
         .select("*")
-        .eq("project_id", projectId)
         .order("created_at", { ascending: true });
-
+      
+      if (selectedProject) {
+        query = query.eq("project_id", selectedProject);
+      }
+      
+      const { data, error } = await query;
       if (error) throw error;
-      setMessages(data || []);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to load messages",
-        variant: "destructive",
-      });
-    }
-  };
+      return data;
+    },
+  });
 
-  const subscribeToMessages = (projectId: string) => {
-    const channel = supabase
-      .channel(`messages:${projectId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `project_id=eq.${projectId}`,
-        },
-        (payload) => {
-          setMessages((prev) => [...prev, payload.new as Message]);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  };
-
-  const sendMessage = async () => {
-    if (!newMessage.trim() || !selectedProject) return;
-
-    try {
-      const { error } = await supabase.from("messages").insert({
-        project_id: selectedProject.id,
-        sender: "You",
-        content: newMessage.trim(),
-      });
-
+  const { data: projects } = useQuery({
+    queryKey: ["projects"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("projects").select("*");
       if (error) throw error;
-      setNewMessage("");
-    } catch (error) {
+      return data;
+    },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const { error } = await supabase.from("messages").insert(data);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages"] });
+      setContent("");
+      setSender("");
+      toast({ title: "Success", description: "Message sent successfully" });
+    },
+    onError: () => {
       toast({
         title: "Error",
         description: "Failed to send message",
         variant: "destructive",
       });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("messages").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages"] });
+      toast({ title: "Success", description: "Message deleted successfully" });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to delete message",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProject || !sender.trim() || !content.trim()) {
+      toast({
+        title: "Error",
+        description: "Please fill in all fields",
+        variant: "destructive",
+      });
+      return;
     }
+
+    createMutation.mutate({
+      project_id: selectedProject,
+      sender: sender.trim(),
+      content: content.trim(),
+    });
   };
-  if (loading) {
-    return (
-      <DashboardLayout>
-        <div className="flex items-center justify-center h-[calc(100vh-12rem)]">
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </DashboardLayout>
-    );
-  }
 
   return (
-    <DashboardLayout>
-      <div className="h-[calc(100vh-12rem)]">
-        <Card className="h-full border-border bg-card">
-          <div className="grid h-full lg:grid-cols-3">
-            <div className="border-r border-border overflow-y-auto">
-              <div className="p-4 border-b border-border">
-                <h2 className="text-xl font-semibold text-card-foreground">Projects</h2>
-              </div>
-              <div className="divide-y divide-border">
-                {projects.map((project) => (
-                  <button
-                    key={project.id}
-                    onClick={() => setSelectedProject(project)}
-                    className={`w-full p-4 text-left hover:bg-muted/50 transition-colors ${
-                      selectedProject?.id === project.id ? "bg-muted/50" : ""
-                    }`}
-                  >
-                    <div className="flex items-start justify-between mb-1">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-card-foreground truncate">{project.name}</p>
-                        {project.description && (
-                          <p className="text-xs text-muted-foreground truncate">{project.description}</p>
-                        )}
-                      </div>
+    <div className="min-h-screen bg-background">
+      <Navigation />
+      <div className="container mx-auto py-8 px-4">
+        <div className="flex flex-col gap-6">
+          <div>
+            <h1 className="text-4xl font-bold tracking-tight">Messages</h1>
+            <p className="text-muted-foreground mt-2">
+              View and send messages for your projects
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2">
+              <Card className="h-[600px] flex flex-col">
+                <CardHeader className="border-b">
+                  <Select value={selectedProject} onValueChange={setSelectedProject}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a project" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {projects?.map((project: any) => (
+                        <SelectItem key={project.id} value={project.id}>
+                          {project.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </CardHeader>
+                <ScrollArea className="flex-1 p-4">
+                  {isLoading ? (
+                    <div className="flex items-center justify-center h-full">
+                      <Loader2 className="h-8 w-8 animate-spin text-primary" />
                     </div>
-                  </button>
-                ))}
-              </div>
+                  ) : messages && messages.length > 0 ? (
+                    <div className="space-y-4">
+                      {messages.map((message: any) => (
+                        <div
+                          key={message.id}
+                          className="flex items-start gap-3 p-4 rounded-lg border hover:bg-muted/50 group"
+                        >
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-semibold text-sm">
+                                {message.sender}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                {format(new Date(message.created_at), "MMM d, h:mm a")}
+                              </span>
+                            </div>
+                            <p className="text-sm">{message.content}</p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => deleteMutation.mutate(message.id)}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center h-full">
+                      <p className="text-muted-foreground">
+                        {selectedProject
+                          ? "No messages yet. Send your first message!"
+                          : "Select a project to view messages"}
+                      </p>
+                    </div>
+                  )}
+                </ScrollArea>
+              </Card>
             </div>
 
-            <div className="lg:col-span-2 flex flex-col h-full">
-              {selectedProject ? (
-                <>
-                  <div className="p-4 border-b border-border">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-accent flex items-center justify-center">
-                        <span className="font-semibold text-accent-foreground">
-                          {selectedProject.name.substring(0, 2).toUpperCase()}
-                        </span>
-                      </div>
-                      <div>
-                        <p className="font-medium text-card-foreground">{selectedProject.name}</p>
-                        <p className="text-xs text-muted-foreground">Project Discussion</p>
-                      </div>
+            <div className="lg:col-span-1">
+              <Card>
+                <CardHeader>
+                  <h3 className="font-semibold">Send Message</h3>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                      <label className="text-sm font-medium mb-2 block">Project</label>
+                      <Select value={selectedProject} onValueChange={setSelectedProject}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select project" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {projects?.map((project: any) => (
+                            <SelectItem key={project.id} value={project.id}>
+                              {project.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                    {messages.length === 0 ? (
-                      <p className="text-center text-muted-foreground">No messages yet. Start the conversation!</p>
-                    ) : (
-                      messages.map((message) => {
-                        const isOwn = message.sender === "You";
-                        return (
-                          <div
-                            key={message.id}
-                            className={`flex ${isOwn ? "justify-end" : "justify-start"}`}
-                          >
-                            <div
-                              className={`max-w-[70%] rounded-2xl px-4 py-3 ${
-                                isOwn
-                                  ? "bg-primary text-primary-foreground"
-                                  : "bg-muted text-card-foreground"
-                              }`}
-                            >
-                              <p className="text-sm font-medium mb-1">{message.sender}</p>
-                              <p className="text-sm">{message.content}</p>
-                              <p
-                                className={`text-xs mt-1 ${
-                                  isOwn ? "text-primary-foreground/70" : "text-muted-foreground"
-                                }`}
-                              >
-                                {new Date(message.created_at).toLocaleTimeString()}
-                              </p>
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-
-                  <div className="p-4 border-t border-border">
-                    <div className="flex gap-2">
+                    <div>
+                      <label className="text-sm font-medium mb-2 block">Your Name</label>
                       <Input
-                        placeholder="Type your message..."
-                        className="flex-1 bg-background border-input"
-                        value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
-                        onKeyPress={(e) => {
-                          if (e.key === "Enter") {
-                            sendMessage();
-                          }
-                        }}
+                        placeholder="Enter your name"
+                        value={sender}
+                        onChange={(e) => setSender(e.target.value)}
                       />
-                      <Button
-                        onClick={sendMessage}
-                        disabled={!newMessage.trim()}
-                        className="bg-primary text-primary-foreground hover:bg-primary-light"
-                      >
-                        <Send className="w-4 h-4" />
-                      </Button>
                     </div>
-                  </div>
-                </>
-              ) : (
-                <div className="flex items-center justify-center h-full">
-                  <p className="text-muted-foreground">Select a project to view messages</p>
-                </div>
-              )}
+                    <div>
+                      <label className="text-sm font-medium mb-2 block">Message</label>
+                      <Textarea
+                        placeholder="Type your message..."
+                        value={content}
+                        onChange={(e) => setContent(e.target.value)}
+                        className="min-h-[150px] resize-none"
+                      />
+                    </div>
+                    <Button
+                      type="submit"
+                      className="w-full"
+                      disabled={createMutation.isPending}
+                    >
+                      <Send className="mr-2 h-4 w-4" />
+                      {createMutation.isPending ? "Sending..." : "Send Message"}
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
             </div>
           </div>
-        </Card>
+        </div>
       </div>
-    </DashboardLayout>
+    </div>
   );
 };
 
